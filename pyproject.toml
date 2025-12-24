@@ -1,0 +1,9 @@
+[project]
+name = "ray-casting"
+version = "0.1.0"
+description = "Ray casting program"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pygame-ce>=2.5.6",
+]
