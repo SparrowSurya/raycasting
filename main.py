@@ -10,10 +10,11 @@ FPS = 30
 HEIGHT = 540
 WIDTH = HEIGHT
 
-WHITE = (0xFF, 0xFF, 0xFF)
-BLACK = (0x00, 0x00, 0x00)
-GREY  = (0xA0, 0xA0, 0xA0)
-RED   = (0xFF, 0x00, 0x00)
+WHITE  = (0xFF, 0xFF, 0xFF)
+BLACK  = (0x00, 0x00, 0x00)
+GREY   = (0xA0, 0xA0, 0xA0)
+RED    = (0xFF, 0x00, 0x00)
+YELLOW = (0xFF, 0xFF, 0x00)
 
 MAP = (
     (1, 1, 1, 1, 1, 1, 1, 1),
@@ -141,10 +142,6 @@ class Vec2:
     def uniform(cls, v: float = 0.0):
         return cls(v, v)
 
-    def set(self, x: float, y: float):
-        self.x = x
-        self.y = y
-
     def move_by(self, dx: float, dy: float):
         self.x += dx
         self.y += dy
@@ -163,13 +160,13 @@ class Player:
         self.color = color
 
     def move_ahead(self):
-        self.pos.set(
+        self.pos = Vec2(
             self.pos.x + self.vel * math.cos(self.angle),
             self.pos.y + self.vel * math.sin(self.angle),
         )
 
     def move_back(self):
-        self.pos.set(
+        self.pos = Vec2(
             self.pos.x - self.vel * math.cos(self.angle),
             self.pos.y - self.vel * math.sin(self.angle),
         )
@@ -189,14 +186,16 @@ class Player:
 
 
 class RayCaster:
-    def __init__(self, player: Player, fov: float):
+    def __init__(self, player: Player, fov: float, color: Optional[_Color] = None):
         self.player = player
         self.fov = fov
+        self.color = color
 
     def render(self, surface: pg.Surface, tilemap: TileMap, res: int):
+        color = self.color or self.player.color
         rays = self.cast_rays(tilemap, res)
         for ray in rays:
-            pg.draw.line(surface, self.player.color, player.pos.as_tuple(), ray.as_tuple())
+            pg.draw.line(surface, color, player.pos.as_tuple(), ray.as_tuple())
 
     def cast_rays(self, tilemap: TileMap, res: int) -> Sequence[Vec2]:
         pos = self.player.pos
@@ -245,7 +244,7 @@ player = Player(
     fov=FOV,
     color=RED,
 )
-raycaster = RayCaster(player, FOV)
+raycaster = RayCaster(player, FOV, YELLOW)
 
 
 
@@ -265,9 +264,15 @@ while running:
     if keys[pg.K_RIGHT]:
         player.rotate_left()
     if keys[pg.K_UP]:
+        pos = player.pos
         player.move_ahead()
+        if tilemap.is_obstacle(*player.pos.as_tuple()):
+            player.pos = pos
     if keys[pg.K_DOWN]:
+        pos = player.pos
         player.move_back()
+        if tilemap.is_obstacle(*player.pos.as_tuple()):
+            player.pos = pos
 
     screen.fill(GREY)
     mini_map.fill(GREY)
@@ -275,8 +280,8 @@ while running:
         for j in range(len(MAP[i])):
             color = WHITE if MAP[i][j] == 1 else BLACK
             pg.draw.rect(mini_map, color, (TILE_SIZE*j+1, TILE_SIZE*i+1, TILE_SIZE-1, TILE_SIZE-1))
-    player.draw(mini_map)
     raycaster.render(mini_map, tilemap, RAY_RES)
+    player.draw(mini_map)
     screen.blit(mini_map)
     pg.display.flip()
     clock.tick(FPS)
