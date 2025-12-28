@@ -10,11 +10,12 @@ FPS = 30
 SCREEN_HEIGHT = 640
 SCREEN_WIDTH = SCREEN_HEIGHT
 
-WHITE  = (0xFF, 0xFF, 0xFF)
-BLACK  = (0x00, 0x00, 0x00)
-GREY   = (0xA0, 0xA0, 0xA0)
-RED    = (0xFF, 0x00, 0x00)
-YELLOW = (0xFF, 0xFF, 0x00)
+WHITE : _Color = (0xFF, 0xFF, 0xFF)
+BLACK : _Color = (0x00, 0x00, 0x00)
+GREY  : _Color = (0xA0, 0xA0, 0xA0)
+RED   : _Color = (0xFF, 0x00, 0x00)
+YELLOW: _Color = (0xFF, 0xFF, 0x00)
+PINK  : _Color = (0xFF, 0xC0, 0xCB)
 
 MAP = (
     (1, 1, 1, 1, 1, 1, 1, 1),
@@ -38,6 +39,11 @@ TILE_SIZE = SCREEN_WIDTH // len(MAP[0])
 MAX_DIST = math.sqrt(MINIMAP_WIDTH**2 + MINIMAP_HEIGHT**2)
 FOV = math.radians(60)
 RESOLUTION = 64
+
+SCENE_HEIGHT = 360
+SCENE_WIDTH = SCENE_HEIGHT+200
+DIST_SCALE = 0.02
+COL_SCALE = 1.25
 
 # TYPES
 # --------------------------------------------------------------------------------------
@@ -95,35 +101,36 @@ def raycast(pos: Vec2, angle: float, tilemap: TileMap) -> Optional[Vec2]:
     return None
 
 
-def cast_rays(player: Player, tilemap: TileMap, fov: float, res: int) -> Sequence[Vec2]:
+def cast_rays(
+    player: Player,
+    tilemap: TileMap,
+    fov: float,
+    res: int,
+) -> Sequence[Tuple[Vec2, float]]:
     pos = player.pos
     angle = player.angle
-    rays: List[Vec2] = []
+    rays: List[Tuple[Vec2, float]] = []
 
-    center_hit = raycast(pos, angle, tilemap)
-    if center_hit is not None:
-        rays.append(center_hit)
+    start_angle = angle + fov / 2
+    step = fov / (res - 1)
 
-    if res > 1:
-        half = res // 2
-        step = fov / (res - 1)
+    for i in range(res):
+        ray_angle = start_angle - i * step
+        hit = raycast(pos, ray_angle, tilemap)
+        if hit is not None:
+            rays.append((hit, ray_angle))
 
-        for i in range(1, half + 1):
-            a = angle + i * step
-            hit = raycast(pos, a, tilemap)
-            if hit is not None:
-                rays.append(hit)
-
-        for i in range(1, half + 1):
-            a = angle - i * step
-            hit = raycast(pos, a, tilemap)
-            if hit is not None:
-                rays.append(hit)
-
+    rays.reverse()
     return rays
 
 
-def draw_triangle(surface: pg.Surface, pos: Vec2, angle: float, color: _Color, scale: float = 1.0):
+def draw_triangle(
+    surface: pg.Surface,
+    pos: Vec2,
+    angle: float,
+    color: _Color,
+    scale: float = 1.0,
+):
     local_points = ( 9,  0), (-6,  6), (-6, -6)
     cos_a = math.cos(angle)
     sin_a = math.sin(angle)
@@ -150,12 +157,35 @@ def draw_minimap(surface: pg.Surface, tilemap: TileMap):
             )
             pg.draw.rect(surface, color, rect)
 
+
 def draw_rays(surface: pg.Surface, pos: Vec2, rays: Sequence[Vec2], color: _Color):
     for ray in rays:
         pg.draw.line(surface, color, pos.as_tuple(), ray.as_tuple())
 
-def draw_3d(surface: pg.Surface, rays: Sequence[Vec2], pos: Vec2):
-    pass
+
+def draw_3d(
+    surface: pg.Surface,
+    rays: Sequence[Tuple[Vec2, float]],
+    pos: Vec2,
+    angle: float,
+):
+    screen_w, screen_h = surface.get_size()
+    column_w = screen_w / len(rays)
+
+    for i, (hit, ray_angle) in enumerate(rays):
+        dist = pos.dist(hit) * DIST_SCALE
+        if dist <= 0:
+            continue
+
+        perp_dist = dist * math.cos(ray_angle - angle)
+        if perp_dist <= 0:
+            continue
+
+        height = (screen_h * COL_SCALE) / perp_dist
+        top = (screen_h - height) / 2
+        rect = (i*column_w, top, column_w+1, height)
+        pg.draw.rect(surface, PINK, rect)
+
 
 # CLASSSES
 # --------------------------------------------------------------------------------------
@@ -215,6 +245,16 @@ class Vec2:
     def as_tuple(self):
         return self.x, self.y
 
+    def dist(self, other: Vec2) -> float:
+        dx = self.x - other.x
+        dy = self.y - other.y
+        return math.sqrt(dx**2 + dy**2)
+
+    def __str__(self) -> str:
+        return f"Vec2({self.x:.2}, {self.y:.2})"
+
+    __repr__ = __str__
+
 
 class Player:
     def __init__(self,
@@ -267,8 +307,9 @@ show_rays = False
 # --------------------------------------------------------------------------------------
 
 pg.init()
-screen = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+screen_surface = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 minimap_surface = pg.surface.Surface((MINIMAP_WIDTH, MINIMAP_HEIGHT), pg.SRCALPHA)
+scene_surface = pg.surface.Surface((SCENE_WIDTH, SCENE_HEIGHT), pg.SRCALPHA)
 clock = pg.time.Clock()
 running = True
 
@@ -315,17 +356,22 @@ while running:
         if minimap.is_obstacle(*player.pos.as_tuple()):
             player.pos = pos
 
-    screen.fill(GREY)
+
+    screen_surface.fill(GREY)
+    rays = cast_rays(player, minimap, FOV, RESOLUTION)
+    scene_surface.fill(BLACK)
+    draw_3d(scene_surface, rays, player.pos, player.angle)
+    scene_pos = (SCREEN_WIDTH-SCENE_WIDTH)/2, (SCREEN_HEIGHT-SCENE_HEIGHT)/2
+    screen_surface.blit(scene_surface, scene_pos)
     if show_minimap:
         draw_minimap(minimap_surface, minimap)
         if show_rays:
-            rays = cast_rays(player, minimap, FOV, RESOLUTION)
-            draw_rays(minimap_surface, player.pos, rays, YELLOW)
+            draw_rays(minimap_surface, player.pos, [ray[0] for ray in rays], YELLOW)
         player.draw(minimap_surface, 2.0)
         sized_minimap = pg.transform.scale_by(minimap_surface, MINIMAP_SCALE)
         minimap_pos = (SCREEN_WIDTH-MINIMAP_WIDTH*MINIMAP_SCALE, 0)
         sized_minimap.set_alpha(100)
-        screen.blit(sized_minimap, minimap_pos)
+        screen_surface.blit(sized_minimap, minimap_pos)
     pg.display.flip()
     clock.tick(FPS)
 
