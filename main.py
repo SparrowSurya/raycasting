@@ -1,6 +1,7 @@
 import math
 import pygame as pg
-from typing import Tuple, List, Optional
+from functools import cached_property
+from typing import Tuple, List, Optional, Sequence
 
 
 # CONSTANTS
@@ -28,6 +29,8 @@ MAP = (
 TILE_SIZE = WIDTH // len(MAP[0])
 MAX_DIST = math.sqrt(WIDTH**2 + HEIGHT**2)
 HFOV = 30
+FOV = HFOV*2
+RAY_RES = 36
 
 # TYPES
 # --------------------------------------------------------------------------------------
@@ -38,34 +41,33 @@ _Color = Tuple[int, int, int]
 # FUNCTIONS
 # --------------------------------------------------------------------------------------
 
-def raycast(pos: Vec2, angle: float) -> Optional[Vec2]:
+def raycast(pos: Vec2, angle: float, tilemap: TileMap) -> Optional[Vec2]:
     dx = math.cos(angle)
     dy = math.sin(angle)
 
-    map_x = int(pos.x // TILE_SIZE)
-    map_y = int(pos.y // TILE_SIZE)
+    map_x, map_y = tilemap.tile_coord(pos.x, pos.y)
 
     step_x = 1 if dx > 0 else -1
     step_y = 1 if dy > 0 else -1
 
     if dx != 0:
-        next_vx = (map_x + (dx > 0)) * TILE_SIZE
+        next_vx = (map_x + (dx > 0)) * tilemap.size
         t_v = (next_vx - pos.x) / dx
-        dt_v = TILE_SIZE / abs(dx)
+        dt_v = tilemap.size / abs(dx)
     else:
         t_v = float("inf")
         dt_v = float("inf")
 
     if dy != 0:
-        next_hy = (map_y + (dy > 0)) * TILE_SIZE
+        next_hy = (map_y + (dy > 0)) * tilemap.size
         t_h = (next_hy - pos.y) / dy
-        dt_h = TILE_SIZE / abs(dy)
+        dt_h = tilemap.size / abs(dy)
     else:
         t_h = float("inf")
         dt_h = float("inf")
 
     t = 0.0
-    while t < MAX_DIST:
+    while t < tilemap.max_dist:
         if t_v < t_h:
             t = t_v
             t_v += dt_v
@@ -76,7 +78,7 @@ def raycast(pos: Vec2, angle: float) -> Optional[Vec2]:
             map_y += step_y
 
         try:
-            if MAP[map_y][map_x] == 1:
+            if tilemap.is_obstacle(map_x, map_y, is_tiled=True):
                 hit_x = pos.x + t * dx
                 hit_y = pos.y + t * dy
                 return Vec2(hit_x, hit_y)
@@ -103,11 +105,31 @@ def draw_triangle(surface: pg.Surface, pos: Vec2, angle: float, color: _Color):
 # CLASSSES
 # --------------------------------------------------------------------------------------
 
-class PgUtil:
+class TileMap:
+    def __init__(self, map: Sequence[Sequence[int]], size: float):
+        self._map = map
+        self.size = size
 
-    @staticmethod
-    def to_pg_coord(x: float, y: float):
-        return x, HEIGHT-y
+    @cached_property
+    def max_dist(self) -> float:
+        width = self.cols * self.size
+        height = self.rows * self.size
+        return math.sqrt(width**2 + height**2)
+
+    @cached_property
+    def rows(self) -> int:
+        return len(self._map)
+
+    @cached_property
+    def cols(self) -> int:
+        return len(self._map[0])
+
+    def is_obstacle(self, x: float, y: float, is_tiled: bool = False) -> bool:
+        tile_x, tile_y = (int(x), int(y)) if is_tiled else self.tile_coord(x, y)
+        return self._map[tile_y][tile_x] == 1
+
+    def tile_coord(self, x: float, y: float) -> Tuple[int, int]:
+        return int(x // self.size), int(y // self.size)
 
 
 class Vec2:
@@ -132,11 +154,12 @@ class Vec2:
 
 
 class Player:
-    def __init__(self, pos: Vec2, angle: float, vel: float, rvel: float, color: _Color):
+    def __init__(self, pos: Vec2, angle: float, vel: float, rvel: float, fov: float, color: _Color):
         self.pos = pos
         self.angle = angle
         self.vel = vel
         self.rvel = rvel
+        self.fov = fov
         self.color = color
 
     def move_ahead(self):
@@ -165,6 +188,45 @@ class Player:
         draw_triangle(screen, self.pos, self.angle, self.color)
 
 
+class RayCaster:
+    def __init__(self, player: Player, fov: float):
+        self.player = player
+        self.fov = fov
+
+    def render(self, surface: pg.Surface, tilemap: TileMap, res: int):
+        rays = self.cast_rays(tilemap, res)
+        for ray in rays:
+            pg.draw.line(surface, self.player.color, player.pos.as_tuple(), ray.as_tuple())
+
+    def cast_rays(self, tilemap: TileMap, res: int) -> Sequence[Vec2]:
+        pos = self.player.pos
+        angle = self.player.angle
+        rays: List[Vec2] = []
+
+        center_hit = raycast(pos, angle, tilemap)
+        if center_hit is not None:
+            rays.append(center_hit)
+
+        if res > 1:
+            fov = math.radians(self.fov)
+            half = res // 2
+            step = fov / (res - 1)
+
+            for i in range(1, half + 1):
+                a = angle + i * step
+                hit = raycast(pos, a, tilemap)
+                if hit is not None:
+                    rays.append(hit)
+
+            for i in range(1, half + 1):
+                a = angle - i * step
+                hit = raycast(pos, a, tilemap)
+                if hit is not None:
+                    rays.append(hit)
+
+        return rays
+
+
 # SETUP
 # --------------------------------------------------------------------------------------
 
@@ -174,13 +236,17 @@ mini_map = pg.surface.Surface((WIDTH, HEIGHT), pg.SRCALPHA)
 clock = pg.time.Clock()
 running = True
 
+tilemap = TileMap(MAP, TILE_SIZE)
 player = Player(
     pos=Vec2(400, 360),
     angle=math.pi*1.5,
     vel=4,
     rvel=math.radians(5),
+    fov=FOV,
     color=RED,
 )
+raycaster = RayCaster(player, FOV)
+
 
 
 # MAINLOOP
@@ -205,18 +271,12 @@ while running:
 
     screen.fill(GREY)
     mini_map.fill(GREY)
-
     for i in range(len(MAP)):
         for j in range(len(MAP[i])):
             color = WHITE if MAP[i][j] == 1 else BLACK
             pg.draw.rect(mini_map, color, (TILE_SIZE*j+1, TILE_SIZE*i+1, TILE_SIZE-1, TILE_SIZE-1))
     player.draw(mini_map)
-
-    for da in range(-HFOV, HFOV):
-        ray = raycast(player.pos, player.angle + math.radians(da))
-        if ray is not None:
-            pg.draw.line(mini_map, RED, player.pos.as_tuple(), ray.as_tuple())
-
+    raycaster.render(mini_map, tilemap, RAY_RES)
     screen.blit(mini_map)
     pg.display.flip()
     clock.tick(FPS)
