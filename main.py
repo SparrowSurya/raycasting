@@ -1,5 +1,6 @@
 import math
-from enum import IntEnum, auto
+import pathlib
+from enum import IntEnum, StrEnum, auto
 import pygame as pg
 from functools import cached_property
 from typing import Tuple, List, Optional, Sequence
@@ -35,9 +36,10 @@ SCREEN_HEIGHT = 600
 SCREEN_WIDTH = 800
 
 TILE_SIZE = 32
-VIEW_DISTANCE = 150
+VIEW_DISTANCE = 180
 FOV = math.radians(60)
 RESOLUTION = 4
+COLLISSION_RADIUS = 5
 
 SCENE_HEIGHT = MAP_ROWS * TILE_SIZE
 SCENE_WIDTH = MAP_COLS * TILE_SIZE
@@ -47,6 +49,8 @@ MINIMAP_SCALE = 0.5
 
 FPS = 30
 
+ASSET_PATH = "assets"
+
 # TYPES
 # --------------------------------------------------------------------------------------
 
@@ -55,6 +59,11 @@ _Color = Tuple[int, int, int]
 
 # FUNCTIONS
 # --------------------------------------------------------------------------------------
+
+
+def load_asset(kind: AssetType, name: str, asset_path: str = ASSET_PATH) -> pg.Surface:
+    file_path = pathlib.Path(asset_path, kind, name)
+    return pg.image.load(file_path)
 
 
 def normalize_angle(angle: float) -> float:
@@ -186,17 +195,20 @@ def draw_max_distance(surface: pg.Surface, pos: Vec2, angle: float, distance: fl
     pg.draw.line(surface, GREEN, pos.as_tuple(), (x1, y1))
 
 
-def draw_3d(
+def draw_walls(
     surface: pg.Surface,
     tilemap: TileMap,
-    rays: Sequence[Optional[Ray]],
+    rays,
     pos: Vec2,
     angle: float,
     fov: float,
+    wall_tex: pg.Surface,
 ):
     surface_w, surface_h = surface.get_size()
-    column_width = surface_w / len(rays)
-    proj_plane_dist = (surface_w / 2) / math.tan(fov / 2)
+    col_w = surface_w / len(rays)
+    proj_dist = (surface_w / 2) / math.tan(fov / 2)
+
+    tex_w, tex_h = wall_tex.get_size()
 
     for i, ray in enumerate(rays):
         if ray is None:
@@ -206,23 +218,46 @@ def draw_3d(
         if dist <= 0:
             continue
 
-        height = (tilemap.size / dist) * proj_plane_dist
+        height = (tilemap.size / dist) * proj_dist
+        height = min(height, 1000)
         y = (surface_h - height) / 2
 
-        t = min(dist / VIEW_DISTANCE, 1.0)
+        if ray.side.is_vertical():
+            offset = ray.hit.x % tilemap.size
+        else:
+            offset = ray.hit.y % tilemap.size
+
+        tex_x = int(offset / tilemap.size * tex_w)
+        tex_x = max(0, min(tex_w - 1, tex_x))
+
+        column = wall_tex.subsurface(tex_x, 0, 1, tex_h)
+        column = pg.transform.scale(column, (int(col_w) + 1, int(height)))
+
+        t = min(dist / tilemap.max_distance, 1.0)
         shade = int(255 * (1 - t))
-        rect = (i * column_width, y, column_width + 1, height)
-        pg.draw.rect(surface, (shade, shade, shade), rect)
+        column.fill((shade, shade, shade), special_flags=pg.BLEND_MULT)
+
+        surface.blit(column, (i * col_w, y))
 
 
 # CLASSSES
 # --------------------------------------------------------------------------------------
+
+
+class AssetType(StrEnum):
+    TEXTURE = "textures"
 
 class Side(IntEnum):
     UP = auto()
     DOWN = auto()
     LEFT = auto()
     RIGHT = auto()
+
+    def is_vertical(self) -> bool:
+        return self in (Side.UP, Side.DOWN)
+
+    def is_horizontal(self) -> bool:
+        return self in (Side.LEFT, Side.RIGHT)
 
 
 class TileMap:
@@ -267,6 +302,16 @@ class TileMap:
 
     def tile_coord(self, x: float, y: float) -> Tuple[int, int]:
         return int(x // self.size), int(y // self.size)
+
+    def collides(self, pos: Vec2, radius: float) -> bool:
+        points = [
+            Vec2(pos.x - radius, pos.y),
+            Vec2(pos.x + radius, pos.y),
+            Vec2(pos.x, pos.y - radius),
+            Vec2(pos.x, pos.y + radius),
+        ]
+        return any(self.is_obstacle(p.x, p.y, is_tiled=False) for p in points)
+
 
 
 class Vec2:
@@ -317,6 +362,7 @@ class Player:
         vel: float,
         rvel: float,
         fov: float,
+        radius: float,
         color: _Color,
     ):
         self.pos = pos
@@ -324,28 +370,46 @@ class Player:
         self.vel = vel
         self.rvel = rvel
         self.fov = fov
+        self.radius = radius
         self.color = color
 
-    def move_ahead(self):
+    def move_ahead(self) -> Player:
         self.pos = Vec2(
             self.pos.x + self.vel * math.cos(self.angle),
             self.pos.y + self.vel * math.sin(self.angle),
         )
+        return self
 
-    def move_back(self):
+    def move_back(self) -> Player:
         self.pos = Vec2(
             self.pos.x - self.vel * math.cos(self.angle),
             self.pos.y - self.vel * math.sin(self.angle),
         )
+        return self
 
-    def rotate_right(self):
+    def rotate_right(self) -> Player:
         self.angle = normalize_angle(self.angle - self.rvel)
+        return self
 
-    def rotate_left(self):
+    def rotate_left(self) -> Player:
         self.angle = normalize_angle(self.angle + self.rvel)
+        return self
 
     def draw(self, screen: pg.Surface, scale: float = 1.0):
         draw_triangle(screen, self.pos, self.angle, self.color, scale)
+
+
+class SpriteSheet:
+    def __init__(self, sprite: pg.Surface, rows: int, cols: int):
+        self._sprite = sprite
+        self.rows = rows
+        self.cols = cols
+        self.size = Vec2(sprite.get_width() / cols, sprite.get_height() / rows)
+
+    def sprite(self, row: int, col: int) -> pg.Surface:
+        x = col * self.size.x
+        y = row * self.size.y
+        return self._sprite.subsurface((x, y, self.size.x, self.size.y))
 
 
 # SETTINGS
@@ -376,10 +440,18 @@ player = Player(
     pos=tilemap.get_point(0.6,0.6),
     angle=0,
     vel=2.5,
-    rvel=2 * (math.pi / 180),
+    rvel=5 * (math.pi / 180),
     fov=FOV,
+    radius=COLLISSION_RADIUS,
     color=YELLOW,
 )
+walls = SpriteSheet(
+    sprite=load_asset(AssetType.TEXTURE, "wolftextures.png"),
+    rows=1,
+    cols=8,
+)
+wall_texture = walls.sprite(0, 1)
+
 
 # MAINLOOP
 # --------------------------------------------------------------------------------------
@@ -405,20 +477,16 @@ while running:
     if keys[pg.K_RIGHT]:
         player.rotate_left()
     if keys[pg.K_UP]:
-        pos = player.pos
-        player.move_ahead()
-        if tilemap.is_obstacle(*player.pos.as_tuple()):
-            player.pos = pos
+        if tilemap.collides(player.move_ahead().pos, player.radius):
+            player.move_back()
     if keys[pg.K_DOWN]:
-        pos = player.pos
-        player.move_back()
-        if tilemap.is_obstacle(*player.pos.as_tuple()):
-            player.pos = pos
+        if tilemap.collides(player.move_back().pos, player.radius):
+            player.move_ahead()
 
     screen_surface.fill(GREY)
     rays = cast_rays(player, tilemap, FOV, RAYS_COUNT)
     scene_surface.fill(BLACK)
-    draw_3d(scene_surface, tilemap, rays, player.pos, player.angle, FOV)
+    draw_walls(scene_surface, tilemap, rays, player.pos, player.angle, player.fov, wall_texture)
     scene_pos = (SCREEN_WIDTH-SCENE_WIDTH)/2, (SCREEN_HEIGHT-SCENE_HEIGHT)/2
     screen_surface.blit(scene_surface, scene_pos)
     if show_minimap:
