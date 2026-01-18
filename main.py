@@ -32,18 +32,22 @@ MAP = (
 MAP_ROWS = len(MAP)
 MAP_COLS = len(MAP[0])
 
-SCREEN_HEIGHT = 600
-SCREEN_WIDTH = 800
+SCREEN_HEIGHT = int(480 * 1.25)
+SCREEN_WIDTH = int(640 * 1.25)
 
 TILE_SIZE = 32
-VIEW_DISTANCE = 180
+VIEW_DISTANCE = 256
 FOV = math.radians(60)
 RESOLUTION = 4
-COLLISSION_RADIUS = 5
+COLLISSION_RADIUS = 4
+PLAYER_VEL = 2
+PLAYER_RVEL = math.radians(5)
 
 SCENE_HEIGHT = MAP_ROWS * TILE_SIZE
 SCENE_WIDTH = MAP_COLS * TILE_SIZE
-RAYS_COUNT = SCENE_WIDTH // RESOLUTION
+MINIMAP_HEIGHT = MAP_ROWS * TILE_SIZE
+MINIMAP_WIDTH = MAP_COLS * TILE_SIZE
+RAYS_COUNT = int(SCENE_WIDTH // RESOLUTION)
 MINIMAP_ALPHA = 255
 MINIMAP_SCALE = 0.5
 
@@ -426,8 +430,8 @@ pg.init()
 pg.font.init()
 
 
-screen_surface = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-minimap_surface = pg.surface.Surface((SCENE_WIDTH, SCENE_HEIGHT), pg.SRCALPHA)
+screen_surface = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags=pg.RESIZABLE)
+minimap_surface = pg.surface.Surface((MINIMAP_WIDTH, MINIMAP_HEIGHT), pg.SRCALPHA)
 scene_surface = pg.surface.Surface((SCENE_WIDTH, SCENE_HEIGHT), pg.SRCALPHA)
 
 font = pg.font.SysFont(None, 24)
@@ -439,8 +443,8 @@ tilemap = TileMap(MAP, TILE_SIZE, VIEW_DISTANCE)
 player = Player(
     pos=tilemap.get_point(0.6,0.6),
     angle=0,
-    vel=2.5,
-    rvel=5 * (math.pi / 180),
+    vel=PLAYER_VEL,
+    rvel=PLAYER_RVEL,
     fov=FOV,
     radius=COLLISSION_RADIUS,
     color=YELLOW,
@@ -461,6 +465,10 @@ while running:
     for event in pg.event.get():
         if event.type == pg.QUIT:
             running = False
+        if event.type == pg.VIDEORESIZE:
+            SCREEN_HEIGHT = event.h
+            SCREEN_WIDTH = event.w
+
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_q:
                 running = False
@@ -483,7 +491,7 @@ while running:
         if tilemap.collides(player.move_back().pos, player.radius):
             player.move_ahead()
 
-    screen_surface.fill(GREY)
+    screen_surface.fill(BLACK)
     rays = cast_rays(player, tilemap, FOV, RAYS_COUNT)
     scene_surface.fill(BLACK)
     draw_walls(scene_surface, tilemap, rays, player.pos, player.angle, player.fov, wall_texture)
@@ -495,7 +503,7 @@ while running:
             draw_rays(minimap_surface, player.pos, rays, YELLOW)
         if show_max_distance:
             draw_max_distance(minimap_surface, player.pos, player.angle, tilemap.max_distance)
-        player.draw(minimap_surface, 1)
+        player.draw(minimap_surface, 1.5)
         minimap_surface.set_alpha(MINIMAP_ALPHA)
         screen_surface.blit(pg.transform.scale_by(minimap_surface, MINIMAP_SCALE), (0, 0))
     pg.display.flip()
